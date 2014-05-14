@@ -72,7 +72,7 @@ class Poche
 
         # l10n
         $language = $this->user->getConfigValue('language');
-        putenv('LC_ALL=' . $language);
+        @putenv('LC_ALL=' . $language);
         setlocale(LC_ALL, $language);
         bindtextdomain($language, LOCALE);
         textdomain($language);
@@ -101,7 +101,7 @@ class Poche
 
     public function configFileIsAvailable() {
         if (! self::$configFileAvailable) {
-            $this->notInstalledMessage[] = 'You have to rename inc/poche/config.inc.php.new to inc/poche/config.inc.php.';
+            $this->notInstalledMessage[] = 'You have to copy (don\'t just rename!) inc/poche/config.inc.default.php to inc/poche/config.inc.php.';
 
             return false;
         }
@@ -240,6 +240,58 @@ class Poche
         # filter for reading time
         $filter = new Twig_SimpleFilter('getReadingTime', 'Tools::getReadingTime');
         $this->tpl->addFilter($filter);
+    }
+
+    public function createNewUser() {
+        if (isset($_GET['newuser'])){
+            if ($_POST['newusername'] != "" && $_POST['password4newuser'] != ""){
+                $newusername = filter_var($_POST['newusername'], FILTER_SANITIZE_STRING);
+                if (!$this->store->userExists($newusername)){
+                    if ($this->store->install($newusername, Tools::encodeString($_POST['password4newuser'] . $newusername))) {
+                        Tools::logm('The new user '.$newusername.' has been installed');
+                        $this->messages->add('s', sprintf(_('The new user %s has been installed. Do you want to <a href="?logout">logout ?</a>'),$newusername));
+                        Tools::redirect();
+                    }
+                    else {
+                        Tools::logm('error during adding new user');
+                        Tools::redirect();
+                    }
+                }
+                else {
+                    $this->messages->add('e', sprintf(_('Error : An user with the name %s already exists !'),$newusername));
+                    Tools::logm('An user with the name '.$newusername.' already exists !');
+                    Tools::redirect();
+                }
+            }
+        }
+    }
+
+    public function deleteUser(){
+        if (isset($_GET['deluser'])){
+            if ($this->store->listUsers() > 1) {
+                if (Tools::encodeString($_POST['password4deletinguser'].$this->user->getUsername()) == $this->store->getUserPassword($this->user->getId())) {
+                    $username = $this->user->getUsername();
+                    $this->store->deleteUserConfig($this->user->getId());
+                    Tools::logm('The configuration for user '. $username .' has been deleted !');
+                    $this->store->deleteTagsEntriesAndEntries($this->user->getId());
+                    Tools::logm('The entries for user '. $username .' has been deleted !');
+                    $this->store->deleteUser($this->user->getId());
+                    Tools::logm('User '. $username .' has been completely deleted !');
+                    Session::logout();
+                    Tools::logm('logout');
+                    Tools::redirect();
+                    $this->messages->add('s', sprintf(_('User %s has been successfully deleted !'),$newusername));
+                }
+                else {
+                    Tools::logm('Bad password !');
+                    $this->messages->add('e', _('Error : The password is wrong !'));
+                }
+            }
+            else {
+                Tools::logm('Only user !');
+                $this->messages->add('e', _('Error : You are the only user, you cannot delete your account !'));
+            }
+        }
     }
 
     private function install()
@@ -434,12 +486,24 @@ class Poche
             case 'toggle_fav' :
                 $this->store->favoriteById($id, $this->user->getId());
                 Tools::logm('mark as favorite link #' . $id);
-                Tools::redirect();
+                if ( Tools::isAjaxRequest() ) {
+                  echo 1;
+                  exit;
+                }
+                else {
+                  Tools::redirect();
+                }
                 break;
             case 'toggle_archive' :
                 $this->store->archiveById($id, $this->user->getId());
                 Tools::logm('archive link #' . $id);
-                Tools::redirect();
+                if ( Tools::isAjaxRequest() ) {
+                  echo 1;
+                  exit;
+                }
+                else {
+                  Tools::redirect();
+                }
                 break;
             case 'archive_all' :
                 $this->store->archiveAll($this->user->getId());
@@ -520,6 +584,7 @@ class Poche
                 $languages = $this->getInstalledLanguages();
                 $token = $this->user->getConfigValue('token');
                 $http_auth = (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['REMOTE_USER'])) ? true : false;
+                $only_user = ($this->store->listUsers() > 1) ? false : true;
                 $tpl_vars = array(
                     'themes' => $themes,
                     'languages' => $languages,
@@ -532,6 +597,7 @@ class Poche
                     'token' => $token,
                     'user_id' => $this->user->getId(),
                     'http_auth' => $http_auth,
+                    'only_user' => $only_user
                 );
                 Tools::logm('config view');
                 break;
@@ -821,13 +887,6 @@ class Poche
      * @return boolean
      */
     public function import() {
-
-      if (!defined('IMPORT_LIMIT')) {
-        define('IMPORT_LIMIT', 5);
-      }
-      if (!defined('IMPORT_DELAY')) {
-        define('IMPORT_DELAY', 5);
-      }
 
       if ( isset($_FILES['file']) ) {
         Tools::logm('Import stated: parsing file');
